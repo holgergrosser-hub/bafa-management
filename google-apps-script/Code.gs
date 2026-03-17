@@ -48,7 +48,9 @@ function doGet(e) {
 
 function doPost(e) {
   try {
-    if (!e || !e.postData) {
+    const hasParameters = !!(e && e.parameter && Object.keys(e.parameter).length);
+    const hasPostData = !!(e && e.postData);
+    if (!e || (!hasPostData && !hasParameters)) {
       return jsonResponse({ status: 'error', message: 'Keine Daten empfangen' });
     }
 
