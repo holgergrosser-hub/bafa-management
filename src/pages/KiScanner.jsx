@@ -213,7 +213,7 @@ Antworte NUR mit einem JSON-Objekt, keine Erklärungen:
   "anzahl_beschaeftigte": "Zahl als Number",
   "jahresbilanzsumme": "Betrag als String",
   "jahresumsatz": "Betrag als String",
-  "antrag_datum": "Datum des Antrags im Format YYYY-MM-DD (letzte Seite / Datum der Unterschrift)"
+  "antrag_datum": "Datum des Antrags im Format YYYY-MM-DD (meist letzte Seite: 'Formular eingegangen am DD.MM.YYYY')"
 }
 
 Text des Antrags:

@@ -359,10 +359,11 @@ function ensureKundenColumn_(sheet, headerName) {
 function normalizeIsoDate_(s) {
   const v = String(s || '').trim();
   if (!v) return '';
-  // Accept YYYY-MM-DD or DD.MM.YYYY
-  const iso = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+  // Accept YYYY-MM-DD or DD.MM.YYYY (also embedded in longer strings)
+  const iso = v.match(/(\d{4})-(\d{2})-(\d{2})/);
   if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-  const de = v.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  const de = v.match(/(\d{2})\.(\d{2})\.(\d{4})/);
   if (de) return `${de[3]}-${de[2]}-${de[1]}`;
 
   // Try Date parsing as last resort
@@ -376,6 +377,12 @@ function normalizeIsoDate_(s) {
   } catch (_) {
     return '';
   }
+}
+
+function getOrCreateSubfolder_(parentFolder, name) {
+  const existing = parentFolder.getFoldersByName(name);
+  if (existing.hasNext()) return existing.next();
+  return parentFolder.createFolder(name);
 }
 
 function formatFolderDate_(isoDate) {
@@ -431,7 +438,17 @@ function getFoerderfaelle(kundeId) {
         folderId: it.folderId || ''
       }));
       const kundenOrdnerId = ordnerCol ? String(allData[i][ordnerCol - 1] || '').trim() : '';
-      return { status: 'success', foerderfaelle: items, kundenOrdnerId: kundenOrdnerId };
+      let antraegeFolderId = '';
+      try {
+        if (kundenOrdnerId) {
+          const kundenFolder = DriveApp.getFolderById(kundenOrdnerId);
+          const antraege = kundenFolder.getFoldersByName('Anträge');
+          if (antraege.hasNext()) antraegeFolderId = antraege.next().getId();
+        }
+      } catch (_) {
+        // ignore
+      }
+      return { status: 'success', foerderfaelle: items, kundenOrdnerId: kundenOrdnerId, antraegeFolderId: antraegeFolderId };
     }
   }
 
@@ -466,15 +483,17 @@ function addFoerderfall(data) {
       if (!kundenOrdnerId) return { status: 'error', message: 'Kundenordner konnte nicht ermittelt werden' };
 
       const kundenFolder = DriveApp.getFolderById(kundenOrdnerId);
+      // Alle Anträge/zu analysierenden Dokumente liegen unterhalb dieses Ordners
+      const antraegeFolder = getOrCreateSubfolder_(kundenFolder, 'Anträge');
       const folderName = `Antrag ${formatFolderDate_(antragDatumIso)}`;
 
       // Create/find subfolder
       let foerderFolder;
-      const existing = kundenFolder.getFoldersByName(folderName);
+      const existing = antraegeFolder.getFoldersByName(folderName);
       if (existing.hasNext()) {
         foerderFolder = existing.next();
       } else {
-        foerderFolder = kundenFolder.createFolder(folderName);
+        foerderFolder = antraegeFolder.createFolder(folderName);
       }
 
       // Update sheet cell
