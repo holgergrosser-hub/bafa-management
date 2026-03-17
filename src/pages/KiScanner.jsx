@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useToast } from '../App'
-import { gasRequest, getAnthropicApiUrl } from '../config'
+import { gasGet, gasRequest, getAnthropicApiUrl } from '../config'
 
 export default function KiScanner() {
   const navigate = useNavigate()
@@ -14,6 +14,54 @@ export default function KiScanner() {
   const [scanResult, setScanResult] = useState(null)
   const [scanStep, setScanStep] = useState('')
   const [pdfText, setPdfText] = useState('')
+
+  const [kunden, setKunden] = useState([])
+  const [kundenLoading, setKundenLoading] = useState(false)
+  const [actionMode, setActionMode] = useState('create') // 'create' | 'assign'
+  const [selectedKundeId, setSelectedKundeId] = useState('')
+
+  React.useEffect(() => {
+    // Default flow:
+    // - Antrag: new customer
+    // - Zuwendungsbescheid: assign to existing customer
+    setActionMode(dokTyp === 'zuwendungsbescheid' ? 'assign' : 'create')
+  }, [dokTyp])
+
+  React.useEffect(() => {
+    if (!scanResult) return
+
+    let alive = true
+    async function loadKunden() {
+      setKundenLoading(true)
+      try {
+        const res = await gasGet('getKunden')
+        if (!alive) return
+        if (res?.status !== 'success') throw new Error(res?.message || 'Kunden konnten nicht geladen werden')
+        const list = Array.isArray(res?.kunden) ? res.kunden : []
+        setKunden(list)
+
+        // Auto-preselect best match (especially helpful for Zuwendungsbescheid)
+        const ubf = String(scanResult?.ubf_nummer || '').replace(/\D+/g, '')
+        if (ubf) {
+          const match = list.find(k => String(k?.UBF_Nummer || '').replace(/\D+/g, '') === ubf)
+          if (match?.ID) setSelectedKundeId(String(match.ID))
+        } else if (scanResult?.firma) {
+          const name = String(scanResult.firma).trim().toLowerCase()
+          const match = list.find(k => String(k?.Firma || '').trim().toLowerCase() === name)
+          if (match?.ID) setSelectedKundeId(String(match.ID))
+        }
+      } catch (e) {
+        if (!alive) return
+        setKunden([])
+        addToast('Kundenliste konnte nicht geladen werden: ' + (e?.message || String(e)), 'error')
+      } finally {
+        if (alive) setKundenLoading(false)
+      }
+    }
+
+    loadKunden()
+    return () => { alive = false }
+  }, [scanResult])
 
   const handleDrop = (e) => {
     e.preventDefault()
@@ -74,6 +122,7 @@ export default function KiScanner() {
 
     setScanning(true)
     setScanResult(null)
+    setSelectedKundeId('')
 
     try {
       setScanStep('📄 PDF wird gelesen...')
@@ -190,6 +239,69 @@ ${text.substring(0, 8000)}`
     navigate('/neu', { state: { prefill: scanResult } })
   }
 
+  const mapScanToKundenUpdate_ = (scan, type) => {
+    const out = {}
+    const put = (key, value) => {
+      if (value === undefined || value === null) return
+      const s = typeof value === 'string' ? value.trim() : value
+      if (s === '') return
+      out[key] = s
+    }
+
+    // Common fields (use Sheet header names)
+    put('Firma', scan?.firma)
+    put('Ansprechpartner', scan?.ansprechpartner)
+    put('Anrede', scan?.anrede)
+    put('Vorname', scan?.vorname)
+    put('Nachname', scan?.nachname)
+    put('Strasse', scan?.strasse)
+    put('PLZ', scan?.plz)
+    put('Ort', scan?.ort)
+    put('Telefon', scan?.telefon)
+    put('Email', scan?.email)
+    put('Rechtsform', scan?.rechtsform)
+    put('Gruendungsdatum', scan?.gruendungsdatum)
+    put('Geschaeftsgegenstand', scan?.geschaeftsgegenstand)
+    put('WZ_Klassifikation', scan?.wz_klassifikation)
+    put('Unternehmenstyp', scan?.unternehmenstyp)
+    put('Anzahl_Beschaeftigte', scan?.anzahl_beschaeftigte)
+    put('Jahresbilanzsumme', scan?.jahresbilanzsumme)
+    put('Jahresumsatz', scan?.jahresumsatz)
+
+    if (type === 'zuwendungsbescheid') {
+      put('UBF_Nummer', scan?.ubf_nummer)
+      put('Bescheid_Datum', scan?.bescheid_datum)
+      put('Vorlagefrist', scan?.vorlagefrist)
+    }
+
+    return out
+  }
+
+  const handleAssignUpdate = async () => {
+    if (!scanResult) return
+    if (!selectedKundeId) {
+      addToast('Bitte zuerst einen Kunden auswählen', 'error')
+      return
+    }
+
+    const updateFields = mapScanToKundenUpdate_(scanResult, dokTyp)
+    const keys = Object.keys(updateFields)
+    if (!keys.length) {
+      addToast('Keine verwertbaren Felder zum Aktualisieren gefunden', 'error')
+      return
+    }
+
+    addToast('Kunde wird aktualisiert...', 'info')
+    try {
+      const res = await gasRequest('updateKunde', { id: selectedKundeId, ...updateFields })
+      if (res?.status !== 'success') throw new Error(res?.message || 'Kunde konnte nicht aktualisiert werden')
+      addToast('Kunde aktualisiert!', 'success')
+      navigate(`/kunde/${selectedKundeId}`)
+    } catch (e) {
+      addToast('Fehler beim Aktualisieren: ' + (e?.message || String(e)), 'error')
+    }
+  }
+
   const handleDirectSave = async () => {
     if (!scanResult) return
     addToast('Kunde wird direkt angelegt...', 'info')
@@ -293,32 +405,102 @@ ${text.substring(0, 8000)}`
 
       {/* Ergebnis */}
       {scanResult && (
-        <div className="card" style={{ borderColor: 'rgba(34,197,94,0.3)' }}>
-          <div className="card-header">
-            <h3 className="card-title" style={{ color: 'var(--green)' }}>✅ Extrahierte Daten</h3>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn btn-secondary btn-sm" onClick={handleUebernehmen}>
-                ✏️ Bearbeiten
-              </button>
-              <button className="btn btn-primary btn-sm" onClick={handleDirectSave}>
-                💾 Direkt speichern
-              </button>
+        <>
+          <div className="card">
+            <div className="card-header">
+              <h3 className="card-title">Kunden-Aktion</h3>
             </div>
-          </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            {Object.entries(scanResult).map(([key, value]) => (
-              <div key={key} style={{ padding: '8px 12px', background: 'var(--navy)', borderRadius: 8 }}>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                  {key.replace(/_/g, ' ')}
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="scannerAction"
+                  checked={actionMode === 'create'}
+                  onChange={() => setActionMode('create')}
+                />
+                Neuen Kunden anlegen
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="scannerAction"
+                  checked={actionMode === 'assign'}
+                  onChange={() => setActionMode('assign')}
+                />
+                Bestehendem Kunden zuordnen (ergänzen)
+              </label>
+            </div>
+
+            {actionMode === 'assign' && (
+              <div style={{ marginTop: 12 }}>
+                <div className="form-group">
+                  <label className="form-label">Kunde auswählen</label>
+                  <select
+                    className="form-select"
+                    value={selectedKundeId}
+                    onChange={(e) => setSelectedKundeId(e.target.value)}
+                    disabled={kundenLoading}
+                  >
+                    <option value="">{kundenLoading ? 'Lade Kunden...' : 'Bitte wählen'}</option>
+                    {kunden.map(k => (
+                      <option key={k?.ID} value={k?.ID}>
+                        {k?.Firma ? `${k.Firma} (${k.ID})` : k?.ID}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-                <div style={{ fontSize: 14, fontWeight: 500, marginTop: 2 }}>
-                  {value || <span style={{ color: 'var(--text-muted)' }}>—</span>}
+
+                <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => selectedKundeId && navigate(`/kunde/${selectedKundeId}`)}
+                    disabled={!selectedKundeId}
+                  >
+                    📂 Zum Kunden
+                  </button>
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleAssignUpdate}
+                    disabled={!selectedKundeId}
+                  >
+                    ✅ Kunde aktualisieren
+                  </button>
                 </div>
               </div>
-            ))}
+            )}
+
+            {actionMode === 'create' && (
+              <div style={{ marginTop: 12, display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
+                <button className="btn btn-secondary" onClick={handleUebernehmen}>
+                  ✏️ Bearbeiten
+                </button>
+                <button className="btn btn-primary" onClick={handleDirectSave}>
+                  💾 Direkt speichern
+                </button>
+              </div>
+            )}
           </div>
-        </div>
+
+          <div className="card" style={{ borderColor: 'rgba(34,197,94,0.3)' }}>
+            <div className="card-header">
+              <h3 className="card-title" style={{ color: 'var(--green)' }}>✅ Extrahierte Daten</h3>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              {Object.entries(scanResult).map(([key, value]) => (
+                <div key={key} style={{ padding: '8px 12px', background: 'var(--navy)', borderRadius: 8 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                    {key.replace(/_/g, ' ')}
+                  </div>
+                  <div style={{ fontSize: 14, fontWeight: 500, marginTop: 2 }}>
+                    {value || <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
       )}
 
       {/* Extrahierter Text (Debug) */}
