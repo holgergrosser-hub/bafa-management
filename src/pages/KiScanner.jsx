@@ -20,6 +20,10 @@ export default function KiScanner() {
   const [actionMode, setActionMode] = useState('create') // 'create' | 'assign'
   const [selectedKundeId, setSelectedKundeId] = useState('')
 
+  const [foerderfaelle, setFoerderfaelle] = useState([])
+  const [foerderfaelleLoading, setFoerderfaelleLoading] = useState(false)
+  const [selectedFoerderfallDate, setSelectedFoerderfallDate] = useState('')
+
   React.useEffect(() => {
     // Default flow:
     // - Antrag: new customer
@@ -62,6 +66,43 @@ export default function KiScanner() {
     loadKunden()
     return () => { alive = false }
   }, [scanResult])
+
+  React.useEffect(() => {
+    if (!selectedKundeId) {
+      setFoerderfaelle([])
+      setSelectedFoerderfallDate('')
+      return
+    }
+
+    let alive = true
+    async function loadFoerderfaelle() {
+      setFoerderfaelleLoading(true)
+      try {
+        const res = await gasGet('getFoerderfaelle', { kundeId: selectedKundeId })
+        if (!alive) return
+        if (res?.status !== 'success') throw new Error(res?.message || 'Förderfälle konnten nicht geladen werden')
+        const list = Array.isArray(res?.foerderfaelle) ? res.foerderfaelle : []
+        setFoerderfaelle(list)
+
+        // Auto-select: match scan date (antrag_datum / bescheid_datum)
+        const scanDate = String(scanResult?.antrag_datum || scanResult?.bescheid_datum || '').trim()
+        if (scanDate) {
+          const match = list.find(f => String(f?.date) === scanDate)
+          if (match?.date) setSelectedFoerderfallDate(String(match.date))
+        }
+      } catch (e) {
+        if (!alive) return
+        setFoerderfaelle([])
+        setSelectedFoerderfallDate('')
+        addToast('Förderfälle konnten nicht geladen werden: ' + (e?.message || String(e)), 'error')
+      } finally {
+        if (alive) setFoerderfaelleLoading(false)
+      }
+    }
+
+    loadFoerderfaelle()
+    return () => { alive = false }
+  }, [selectedKundeId])
 
   const handleDrop = (e) => {
     e.preventDefault()
@@ -145,7 +186,8 @@ Antworte NUR mit einem JSON-Objekt, keine Erklärungen:
   "ort": "Ort",
   "ubf_nummer": "Nur die Zahlen der UBF-Nummer ohne 'UBF-' Prefix",
   "bescheid_datum": "Datum im Format YYYY-MM-DD",
-  "vorlagefrist": "Vorlagefrist-Datum im Format YYYY-MM-DD"
+  "vorlagefrist": "Vorlagefrist-Datum im Format YYYY-MM-DD",
+  "antrag_datum": "Datum des Antrags/Bescheids im Format YYYY-MM-DD (für Ordnername Antrag tt.mm.jjjj; wenn unklar, nimm bescheid_datum)"
 }
 
 Text des Zuwendungsbescheids:
@@ -170,7 +212,8 @@ Antworte NUR mit einem JSON-Objekt, keine Erklärungen:
   "unternehmenstyp": "eigenständig/Partner/verbunden",
   "anzahl_beschaeftigte": "Zahl als Number",
   "jahresbilanzsumme": "Betrag als String",
-  "jahresumsatz": "Betrag als String"
+  "jahresumsatz": "Betrag als String",
+  "antrag_datum": "Datum des Antrags im Format YYYY-MM-DD (letzte Seite / Datum der Unterschrift)"
 }
 
 Text des Antrags:
@@ -299,6 +342,34 @@ ${text.substring(0, 8000)}`
       navigate(`/kunde/${selectedKundeId}`)
     } catch (e) {
       addToast('Fehler beim Aktualisieren: ' + (e?.message || String(e)), 'error')
+    }
+  }
+
+  const ensureFoerderfallFolder = async () => {
+    if (!scanResult) return
+    if (!selectedKundeId) {
+      addToast('Bitte zuerst einen Kunden auswählen', 'error')
+      return
+    }
+
+    const date = String(scanResult?.antrag_datum || scanResult?.bescheid_datum || '').trim()
+    if (!date) {
+      addToast('Kein Datum im Scan gefunden (antrag_datum/bescheid_datum). Bitte erst prüfen/bearbeiten.', 'error')
+      return
+    }
+
+    addToast('Antrag-Unterordner wird angelegt...', 'info')
+    try {
+      const res = await gasRequest('addFoerderfall', { kundeId: selectedKundeId, antragDatum: date })
+      if (res?.status !== 'success') throw new Error(res?.message || 'Foerderfall konnte nicht angelegt werden')
+      const created = res?.foerderfall
+      if (created?.date) setSelectedFoerderfallDate(String(created.date))
+      // refresh list
+      const refreshed = await gasGet('getFoerderfaelle', { kundeId: selectedKundeId })
+      if (refreshed?.status === 'success') setFoerderfaelle(Array.isArray(refreshed?.foerderfaelle) ? refreshed.foerderfaelle : [])
+      addToast('Antrag-Unterordner angelegt', 'success')
+    } catch (e) {
+      addToast('Fehler beim Anlegen des Antrag-Ordners: ' + (e?.message || String(e)), 'error')
     }
   }
 
@@ -449,6 +520,28 @@ ${text.substring(0, 8000)}`
                       </option>
                     ))}
                   </select>
+                </div>
+
+                <div className="form-group" style={{ marginTop: 12 }}>
+                  <label className="form-label">Antrag auswählen (Unterordner)</label>
+                  <select
+                    className="form-select"
+                    value={selectedFoerderfallDate}
+                    onChange={(e) => setSelectedFoerderfallDate(e.target.value)}
+                    disabled={!selectedKundeId || foerderfaelleLoading}
+                  >
+                    <option value="">{foerderfaelleLoading ? 'Lade Anträge...' : 'Bitte wählen'}</option>
+                    {foerderfaelle.map(f => (
+                      <option key={f?.date} value={f?.date}>
+                        {f?.name || f?.date}
+                      </option>
+                    ))}
+                  </select>
+                  <div style={{ marginTop: 8, display: 'flex', justifyContent: 'flex-end' }}>
+                    <button className="btn btn-secondary" onClick={ensureFoerderfallFolder} disabled={!selectedKundeId}>
+                      ➕ Antrag-Unterordner anlegen
+                    </button>
+                  </div>
                 </div>
 
                 <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>

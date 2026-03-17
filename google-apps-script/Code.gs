@@ -31,6 +31,8 @@ function doGet(e) {
         return jsonResponse(getKunden());
       case 'getKunde':
         return jsonResponse(getKunde(e.parameter.id));
+      case 'getFoerderfaelle':
+        return jsonResponse(getFoerderfaelle(e.parameter.kundeId));
       case 'getDashboard':
         return jsonResponse(getDashboardData());
       case 'getCheckliste':
@@ -67,6 +69,8 @@ function doPost(e) {
         return jsonResponse(neuerKunde(data));
       case 'updateKunde':
         return jsonResponse(updateKunde(data));
+      case 'addFoerderfall':
+        return jsonResponse(addFoerderfall(data));
       case 'kiExtraktion':
         return jsonResponse(kiExtraktion(data));
       case 'projektleiterDaten':
@@ -335,6 +339,169 @@ function updateKunde(data) {
     }
   }
   
+  return { status: 'error', message: 'Kunde nicht gefunden' };
+}
+
+// ============================================
+// FÖRDERFÄLLE (Mehrfach-Förderungen pro Kunde)
+// ============================================
+
+function ensureKundenColumn_(sheet, headerName) {
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const idx = headers.indexOf(headerName);
+  if (idx !== -1) return idx + 1;
+
+  const newCol = headers.length + 1;
+  sheet.getRange(1, newCol).setValue(headerName).setFontWeight('bold').setBackground('#4285f4').setFontColor('white');
+  return newCol;
+}
+
+function normalizeIsoDate_(s) {
+  const v = String(s || '').trim();
+  if (!v) return '';
+  // Accept YYYY-MM-DD or DD.MM.YYYY
+  const iso = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const de = v.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (de) return `${de[3]}-${de[2]}-${de[1]}`;
+
+  // Try Date parsing as last resort
+  try {
+    const d = new Date(v);
+    if (isNaN(d.getTime())) return '';
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  } catch (_) {
+    return '';
+  }
+}
+
+function formatFolderDate_(isoDate) {
+  const m = String(isoDate || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return '';
+  return `${m[3]}.${m[2]}.${m[1]}`;
+}
+
+function parseFoerderfaelleCell_(cellValue) {
+  const text = String(cellValue || '').trim();
+  if (!text) return [];
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const items = [];
+  lines.forEach(line => {
+    const parts = line.split('|');
+    const dateIso = normalizeIsoDate_(parts[0]);
+    const folderId = (parts[1] || '').trim();
+    if (!dateIso) return;
+    items.push({ date: dateIso, folderId: folderId });
+  });
+  // Deduplicate by date
+  const seen = {};
+  return items.filter(it => {
+    if (seen[it.date]) return false;
+    seen[it.date] = true;
+    return true;
+  });
+}
+
+function serializeFoerderfaelleCell_(items) {
+  const sorted = (items || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  return sorted.map(it => `${it.date}|${it.folderId || ''}`.trim()).join('\n');
+}
+
+function getFoerderfaelle(kundeId) {
+  if (!kundeId) return { status: 'error', message: 'kundeId fehlt' };
+
+  const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(CONFIG.SHEET_NAMES.KUNDEN);
+  const allData = sheet.getDataRange().getValues();
+  const headers = allData[0];
+
+  const colAntraege = ensureKundenColumn_(sheet, 'Antraege');
+  const headerOrdnerIdx = headers.indexOf('Ordner_ID');
+  const ordnerCol = headerOrdnerIdx !== -1 ? headerOrdnerIdx + 1 : null;
+
+  for (let i = 1; i < allData.length; i++) {
+    if (allData[i][0] === kundeId) {
+      const cell = sheet.getRange(i + 1, colAntraege).getValue();
+      const items = parseFoerderfaelleCell_(cell).map(it => ({
+        date: it.date,
+        name: `Antrag ${formatFolderDate_(it.date)}`,
+        folderId: it.folderId || ''
+      }));
+      const kundenOrdnerId = ordnerCol ? String(allData[i][ordnerCol - 1] || '').trim() : '';
+      return { status: 'success', foerderfaelle: items, kundenOrdnerId: kundenOrdnerId };
+    }
+  }
+
+  return { status: 'error', message: 'Kunde nicht gefunden' };
+}
+
+function addFoerderfall(data) {
+  const kundeId = data && data.kundeId;
+  const antragDatumIso = normalizeIsoDate_(data && (data.antragDatum || data.bescheid_datum || data.bescheidDatum));
+  if (!kundeId) return { status: 'error', message: 'kundeId fehlt' };
+  if (!antragDatumIso) return { status: 'error', message: 'antragDatum fehlt oder ungültig (erwartet YYYY-MM-DD oder DD.MM.YYYY)' };
+
+  const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(CONFIG.SHEET_NAMES.KUNDEN);
+  const allData = sheet.getDataRange().getValues();
+  const headers = allData[0];
+
+  const colAntraege = ensureKundenColumn_(sheet, 'Antraege');
+  const headerOrdnerIdx = headers.indexOf('Ordner_ID');
+  const ordnerCol = headerOrdnerIdx !== -1 ? headerOrdnerIdx + 1 : null;
+
+  for (let i = 1; i < allData.length; i++) {
+    if (allData[i][0] === kundeId) {
+      // Ensure customer main folder exists
+      let kundenOrdnerId = ordnerCol ? String(allData[i][ordnerCol - 1] || '').trim() : '';
+      if (!kundenOrdnerId) {
+        const ordnerRes = erstelleKundenOrdner(kundeId);
+        if (ordnerRes && ordnerRes.status === 'success') {
+          kundenOrdnerId = ordnerRes.folderId;
+        }
+      }
+      if (!kundenOrdnerId) return { status: 'error', message: 'Kundenordner konnte nicht ermittelt werden' };
+
+      const kundenFolder = DriveApp.getFolderById(kundenOrdnerId);
+      const folderName = `Antrag ${formatFolderDate_(antragDatumIso)}`;
+
+      // Create/find subfolder
+      let foerderFolder;
+      const existing = kundenFolder.getFoldersByName(folderName);
+      if (existing.hasNext()) {
+        foerderFolder = existing.next();
+      } else {
+        foerderFolder = kundenFolder.createFolder(folderName);
+      }
+
+      // Update sheet cell
+      const cell = sheet.getRange(i + 1, colAntraege).getValue();
+      const items = parseFoerderfaelleCell_(cell);
+      const already = items.find(it => it.date === antragDatumIso);
+      if (!already) {
+        items.push({ date: antragDatumIso, folderId: foerderFolder.getId() });
+      } else if (!already.folderId) {
+        already.folderId = foerderFolder.getId();
+      }
+      sheet.getRange(i + 1, colAntraege).setValue(serializeFoerderfaelleCell_(items));
+
+      logAktion(kundeId, 'Foerderfall angelegt', `${folderName} | ${foerderFolder.getUrl()}`);
+
+      return {
+        status: 'success',
+        foerderfall: {
+          date: antragDatumIso,
+          name: folderName,
+          folderId: foerderFolder.getId(),
+          folderUrl: foerderFolder.getUrl()
+        }
+      };
+    }
+  }
+
   return { status: 'error', message: 'Kunde nicht gefunden' };
 }
 
