@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useToast } from '../App'
-import { CONFIG, gasRequest } from '../config'
+import { gasRequest, getAnthropicApiUrl } from '../config'
 
 export default function KiScanner() {
   const navigate = useNavigate()
@@ -54,6 +54,16 @@ export default function KiScanner() {
       reader.onerror = reject
       reader.readAsArrayBuffer(pdfFile)
     })
+  }
+
+  const readJsonSafely_ = async (resp) => {
+    const text = await resp.text()
+    if (!text) return {}
+    try {
+      return JSON.parse(text)
+    } catch (_) {
+      return { raw: text }
+    }
   }
 
   const handleScan = async () => {
@@ -117,19 +127,37 @@ Antworte NUR mit einem JSON-Objekt, keine Erklärungen:
 Text des Antrags:
 ${text.substring(0, 8000)}`
 
-      const response = await fetch(CONFIG.ANTHROPIC_API, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt,
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 1000
-        })
-      })
+      const url = getAnthropicApiUrl()
 
-      const data = await response.json()
+      let response
+      try {
+        response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt,
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 1000
+          })
+        })
+      } catch (e) {
+        const msg = String(e?.message || e)
+        if (/failed to fetch/i.test(msg)) {
+          throw new Error(
+            `Claude-Proxy nicht erreichbar (${url}). ` +
+            `Wenn du lokal entwickelst, starte die App über Netlify Functions (z.B. \"netlify dev\"). ` +
+            `In Netlify-Prod: prüfe, ob die Function deployed ist und die Env-Var ANTHROPIC_API_KEY gesetzt ist.`
+          )
+        }
+        throw e
+      }
+
+      const data = await readJsonSafely_(response)
       if (!response.ok || data?.status === 'error') {
-        throw new Error(data?.message || `Claude-Request fehlgeschlagen (${response.status})`)
+        const rawHint = typeof data?.raw === 'string' && data.raw.trim()
+          ? ` Antwort war kein JSON (vermutlich HTML/Redirect): ${data.raw.slice(0, 120)}...`
+          : ''
+        throw new Error(data?.message || `Claude-Request fehlgeschlagen (${response.status}).${rawHint}`)
       }
 
       const anthropic = data?.anthropic || data

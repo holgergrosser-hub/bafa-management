@@ -14,6 +14,37 @@ export const CONFIG = {
   BERATER_ADRESSE: 'Simonstr. 14, 90763 Fürth',
 };
 
+export function getAnthropicApiUrl() {
+  // Optional override via Vite env var (Netlify build env supports this)
+  try {
+    const fromEnv = (import.meta?.env?.VITE_ANTHROPIC_API || '').trim();
+    if (fromEnv) return fromEnv;
+  } catch (_) {
+    // ignore
+  }
+
+  // Default: same-origin Netlify Function path
+  const defaultUrl = CONFIG.ANTHROPIC_API;
+
+  // DX: If the app is started via `vite dev` (e.g. :5173), Netlify Functions are
+  // typically served by `netlify dev` on :8888. Point there automatically.
+  try {
+    if (typeof window !== 'undefined' && window.location) {
+      const { hostname, port, protocol } = window.location;
+      const isLocal = hostname === 'localhost' || hostname === '127.0.0.1';
+      const isNetlifyFunctionPath = typeof defaultUrl === 'string' && defaultUrl.startsWith('/.netlify/functions/');
+
+      if (isLocal && isNetlifyFunctionPath && port && port !== '8888') {
+        return `${protocol}//${hostname}:8888${defaultUrl}`;
+      }
+    }
+  } catch (_) {
+    // ignore
+  }
+
+  return defaultUrl;
+}
+
 function getGasUrl_() {
   try {
     if (typeof window !== 'undefined' && window.localStorage) {
