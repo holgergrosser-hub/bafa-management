@@ -427,27 +427,6 @@ function erstelleKundenOrdner(kundeId) {
     folder = parentFolder.createFolder(firma);
   }
   
-  // Unterordner anlegen
-  const unterordner = [
-    'Zuwendungsbescheid',
-    'Antrag',
-    'Beraterbericht',
-    'Projektbericht',
-    'Rechnung',
-    'Kontoauszug',
-    'EU-KMU & De-minimis',
-    'Charta Erklärung',
-    'Verwendungsnachweis',
-    'Korrespondenz'
-  ];
-  
-  unterordner.forEach(name => {
-    const existing = folder.getFoldersByName(name);
-    if (!existing.hasNext()) {
-      folder.createFolder(name);
-    }
-  });
-  
   // Ordner-ID im Sheet speichern
   if (rowIndex >= 0) {
     sheet.getRange(rowIndex + 1, 24).setValue(folder.getId());
