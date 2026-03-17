@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useToast } from '../App'
-import { gasRequest } from '../config'
+import { CONFIG, gasRequest } from '../config'
 
 export default function KiScanner() {
   const navigate = useNavigate()
@@ -117,18 +117,23 @@ Antworte NUR mit einem JSON-Objekt, keine Erklärungen:
 Text des Antrags:
 ${text.substring(0, 8000)}`
 
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
+      const response = await fetch(CONFIG.ANTHROPIC_API, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          prompt,
           model: 'claude-sonnet-4-20250514',
-          max_tokens: 1000,
-          messages: [{ role: 'user', content: prompt }]
+          max_tokens: 1000
         })
       })
 
       const data = await response.json()
-      const resultText = data.content?.[0]?.text || ''
+      if (!response.ok || data?.status === 'error') {
+        throw new Error(data?.message || `Claude-Request fehlgeschlagen (${response.status})`)
+      }
+
+      const anthropic = data?.anthropic || data
+      const resultText = anthropic?.content?.[0]?.text || ''
 
       setScanStep('✅ Daten werden verarbeitet...')
       const jsonMatch = resultText.match(/\{[\s\S]*\}/)

@@ -3,8 +3,9 @@ export const CONFIG = {
   // Google Apps Script Web App URL - NACH DEPLOYMENT EINTRAGEN
   GAS_URL: 'https://script.google.com/macros/s/AKfycbxY1rsKBrxQT4Eaj5-sZKuvf8hNjgQRYcJ5QfijQLNZW-F9Wr0zfEuha2nLZQ_odopQ/exec',
   
-  // Anthropic API (wird direkt vom Browser aufgerufen)
-  ANTHROPIC_API: 'https://api.anthropic.com/v1/messages',
+  // Claude/Anthropic wird aus Sicherheitsgründen über eine Netlify Function aufgerufen.
+  // Netlify Env: ANTHROPIC_API_KEY
+  ANTHROPIC_API: '/.netlify/functions/claude',
   
   // BAFA-spezifische Konstanten
   BAFA_ID: '123889',

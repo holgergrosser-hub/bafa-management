@@ -119,6 +119,15 @@ npm run dev
 # Für Netlify: automatisch über Git-Push
 ```
 
+### 3a. Claude/Anthropic (KI-Scanner)
+Aus Sicherheitsgründen wird Claude **nicht direkt im Browser** aufgerufen, sondern über eine Netlify Function.
+
+- In Netlify → Site settings → Environment variables:
+  - `ANTHROPIC_API_KEY` = dein Anthropic API Key
+
+Hinweis für lokale Entwicklung:
+- Netlify Functions laufen lokal am einfachsten mit `netlify dev` (statt `npm run dev`).
+
 ### 4. Trigger einrichten
 - In Apps Script: `setupTrigger()` ausführen
 - Tägliche Fristprüfung wird um 8:00 Uhr aktiviert
