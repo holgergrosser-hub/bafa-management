@@ -198,7 +198,11 @@ export default function KiScanner() {
       if (res?.status !== 'success') throw new Error(res?.message || 'Dokument konnte nicht in Drive abgelegt werden')
       addToast('PDF in Drive abgelegt', 'success')
     } catch (e) {
-      addToast('PDF konnte nicht in Drive abgelegt werden: ' + (e?.message || String(e)), 'error')
+      const msg = String(e?.message || e)
+      const hint = /Unbekannte Aktion:\s*storeScanDocument/i.test(msg)
+        ? ' (GAS-WebApp läuft vermutlich noch auf alter Version/URL. Bitte GAS-Deployment aktualisieren und die GAS-URL in den Einstellungen prüfen.)'
+        : ''
+      addToast('PDF konnte nicht in Drive abgelegt werden: ' + msg + hint, 'error')
     }
   }
 

@@ -46,6 +46,14 @@ export function getAnthropicApiUrl() {
 }
 
 function getGasUrl_() {
+  // Optional override via Vite env var (recommended for Netlify)
+  try {
+    const fromEnv = (import.meta?.env?.VITE_GAS_URL || '').trim();
+    if (fromEnv) return fromEnv;
+  } catch (_) {
+    // ignore
+  }
+
   try {
     if (typeof window !== 'undefined' && window.localStorage) {
       const saved = window.localStorage.getItem('gasUrl');
