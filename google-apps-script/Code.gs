@@ -69,6 +69,8 @@ function doPost(e) {
         return jsonResponse(neuerKunde(data));
       case 'updateKunde':
         return jsonResponse(updateKunde(data));
+      case 'storeScanDocument':
+        return jsonResponse(storeScanDocument(data));
       case 'addFoerderfall':
         return jsonResponse(addFoerderfall(data));
       case 'kiExtraktion':
@@ -383,6 +385,75 @@ function getOrCreateSubfolder_(parentFolder, name) {
   const existing = parentFolder.getFoldersByName(name);
   if (existing.hasNext()) return existing.next();
   return parentFolder.createFolder(name);
+}
+
+function storeScanDocument(data) {
+  const kundeId = data && data.kundeId;
+  if (!kundeId) return { status: 'error', message: 'kundeId fehlt' };
+
+  const base64Data = data && (data.base64Data || data.fileBase64 || data.base64);
+  if (!base64Data) return { status: 'error', message: 'base64Data fehlt' };
+
+  const fileName = String(data.fileName || data.name || 'scan.pdf');
+  const mimeType = String(data.mimeType || 'application/pdf');
+  const docType = String(data.docType || data.dokTyp || '').trim();
+  const antragDatumIso = normalizeIsoDate_(data && (data.antragDatum || data.foerderfallDate || data.date));
+
+  // Ensure customer folder exists
+  const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(CONFIG.SHEET_NAMES.KUNDEN);
+  const allData = sheet.getDataRange().getValues();
+  const headers = allData[0];
+  const headerOrdnerIdx = headers.indexOf('Ordner_ID');
+  const ordnerCol = headerOrdnerIdx !== -1 ? headerOrdnerIdx + 1 : null;
+
+  let kundenOrdnerId = '';
+  let rowIndex = -1;
+  for (let i = 1; i < allData.length; i++) {
+    if (allData[i][0] === kundeId) {
+      rowIndex = i;
+      kundenOrdnerId = ordnerCol ? String(allData[i][ordnerCol - 1] || '').trim() : '';
+      break;
+    }
+  }
+  if (rowIndex === -1) return { status: 'error', message: 'Kunde nicht gefunden' };
+
+  if (!kundenOrdnerId) {
+    const ordnerRes = erstelleKundenOrdner(kundeId);
+    if (ordnerRes && ordnerRes.status === 'success') kundenOrdnerId = ordnerRes.folderId;
+  }
+  if (!kundenOrdnerId) return { status: 'error', message: 'Kundenordner konnte nicht ermittelt werden' };
+
+  const kundenFolder = DriveApp.getFolderById(kundenOrdnerId);
+  const antraegeFolder = getOrCreateSubfolder_(kundenFolder, 'Anträge');
+
+  // Destination: case folder when date is available, otherwise the "Anträge" folder
+  let targetFolder = antraegeFolder;
+  let targetFolderId = antraegeFolder.getId();
+
+  if (antragDatumIso) {
+    // Use existing logic (and sheet tracking) to ensure the case folder exists
+    const ffRes = addFoerderfall({ kundeId: kundeId, antragDatum: antragDatumIso });
+    if (ffRes && ffRes.status === 'success' && ffRes.foerderfall && ffRes.foerderfall.folderId) {
+      targetFolderId = ffRes.foerderfall.folderId;
+      targetFolder = DriveApp.getFolderById(targetFolderId);
+    }
+  }
+
+  // Decode and store
+  const bytes = Utilities.base64Decode(String(base64Data));
+  const blob = Utilities.newBlob(bytes, mimeType, fileName);
+  const created = targetFolder.createFile(blob);
+
+  logAktion(kundeId, 'Scan-Dokument abgelegt', `${docType || 'scan'} | ${fileName} | ${created.getUrl()}`);
+
+  return {
+    status: 'success',
+    fileId: created.getId(),
+    fileUrl: created.getUrl(),
+    folderId: targetFolderId,
+    kundenOrdnerId: kundenOrdnerId
+  };
 }
 
 function formatFolderDate_(isoDate) {

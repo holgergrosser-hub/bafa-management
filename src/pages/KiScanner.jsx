@@ -155,6 +155,53 @@ export default function KiScanner() {
     }
   }
 
+  const arrayBufferToBase64_ = (buffer) => {
+    const bytes = new Uint8Array(buffer)
+    const chunkSize = 0x8000
+    let binary = ''
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize)
+      binary += String.fromCharCode.apply(null, chunk)
+    }
+    return btoa(binary)
+  }
+
+  const storeScanDocument_ = async ({ kundeId, docType, dateIso }) => {
+    if (!file) return
+    if (!kundeId) return
+
+    // Avoid extremely large payloads (Apps Script + base64 + JSON overhead)
+    const maxBytes = 12 * 1024 * 1024
+    if (file.size > maxBytes) {
+      addToast('PDF ist zu groß zum automatischen Ablegen in Drive (>12MB). Bitte verkleinern/komprimieren und erneut versuchen.', 'error')
+      return
+    }
+
+    let base64Data = ''
+    try {
+      const buf = await file.arrayBuffer()
+      base64Data = arrayBufferToBase64_(buf)
+    } catch (e) {
+      addToast('PDF konnte nicht gelesen werden (für Drive-Upload): ' + (e?.message || String(e)), 'error')
+      return
+    }
+
+    try {
+      const res = await gasRequest('storeScanDocument', {
+        kundeId,
+        docType,
+        antragDatum: dateIso || '',
+        fileName: file.name,
+        mimeType: file.type || 'application/pdf',
+        base64Data
+      })
+      if (res?.status !== 'success') throw new Error(res?.message || 'Dokument konnte nicht in Drive abgelegt werden')
+      addToast('PDF in Drive abgelegt', 'success')
+    } catch (e) {
+      addToast('PDF konnte nicht in Drive abgelegt werden: ' + (e?.message || String(e)), 'error')
+    }
+  }
+
   const handleScan = async () => {
     if (!file) {
       addToast('Bitte zuerst ein PDF hochladen', 'error')
@@ -338,6 +385,15 @@ ${text.substring(0, 8000)}`
     try {
       const res = await gasRequest('updateKunde', { id: selectedKundeId, ...updateFields })
       if (res?.status !== 'success') throw new Error(res?.message || 'Kunde konnte nicht aktualisiert werden')
+
+      // Store the scanned PDF in Drive under the chosen foerderfall (preferred)
+      const dateIso = String(selectedFoerderfallDate || scanResult?.antrag_datum || scanResult?.bescheid_datum || '').trim()
+      if (!dateIso) {
+        addToast('Hinweis: Kein Datum für Ablage gefunden (antrag_datum/bescheid_datum). PDF wird nicht automatisch abgelegt.', 'info')
+      } else {
+        await storeScanDocument_({ kundeId: selectedKundeId, docType: dokTyp, dateIso })
+      }
+
       addToast('Kunde aktualisiert!', 'success')
       navigate(`/kunde/${selectedKundeId}`)
     } catch (e) {
@@ -381,6 +437,13 @@ ${text.substring(0, 8000)}`
       if (result?.status !== 'success') {
         throw new Error(result?.message || 'Konnte Kunden nicht anlegen')
       }
+
+      const kundeId = result?.kundeId
+      const dateIso = String(scanResult?.antrag_datum || '').trim()
+      if (kundeId) {
+        await storeScanDocument_({ kundeId, docType: dokTyp, dateIso })
+      }
+
       addToast(`Kunde ${scanResult.firma || 'angelegt'} angelegt!`, 'success')
       if (result?.kundeId) navigate(`/kunde/${result.kundeId}`)
       else navigate('/')
